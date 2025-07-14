@@ -1,26 +1,166 @@
-{% extends 'learning_logs/base.html' %}
-
-{% block page_header %}
-    <h1>{{ topic.text }}</h1>
-{% endblock page_header %}
+{% extends "learning_logs/base.html" %}
 
 {% block content %}
-
-  <p>
-    <a href="{% url 'learning_logs:new_entry' topic.id %}">Add new entry</a>
-  </p>
-
-    {% for entry in entries %}
-       <div class="card mb-3">
-           <h4 class="card-header">
-               {{ entry.date_added|date:'M d,Y H:i' }}
-              <small><a href="{% url 'learning_logs:edit_entry' entry.id %}">
-                  edit entry</a></small>
-           </h4>
-           <div class="card-body">{{ entry.text|linebreaks }}</div>
-       </div>
-    {% empty %}
-      <p>There are no entries for this topic yet.</p>
-    {% endfor %}
-
+  <p>主题: {{ topic }}</p>
+  
+  <!-- 搜索表单 -->
+  <form method="get" action="{% url 'learning_logs:topic' topic.id %}" class="search-form">
+    <input type="text" name="q" 
+           placeholder="搜索此主题下的条目内容..." 
+           value="{{ search_query }}"
+           class="search-input">
+    <button type="submit" class="search-btn">搜索</button>
+    {% if search_query %}
+      <a href="{% url 'learning_logs:topic' topic.id %}" class="clear-search">清空搜索</a>
+    {% endif %}
+  </form>
+  
+  <!-- 搜索结果提示 -->
+  {% if search_query %}
+    <p class="search-result-info">
+      搜索关键词："{{ search_query }}"，
+      {% if entries %}
+        找到 {{ entries|length }} 条匹配结果
+      {% else %}
+        未找到匹配的条目
+      {% endif %}
+    </p>
+  {% endif %}
+  
+  <!-- 新增条目链接（仅所有者可见） -->
+  {% if topic.owner == user %}
+    <p class="add-entry-link">
+      <a href="{% url 'learning_logs:new_entry' topic.id %}">添加新条目 &raquo;</a>
+    </p>
+  {% endif %}
+  
+  <!-- 条目列表 -->
+  {% for entry in entries %}
+    <div class="entry-card">
+      <p class="entry-date">{{ entry.date_added|date:'M d, Y H:i' }}</p>
+      
+      <!-- 条目文字内容 -->
+      <p class="entry-text">{{ entry.text|linebreaks }}</p>
+      
+      <!-- 条目图片 -->
+      {% if entry.image %}
+        <div class="entry-image-container">
+          <img src="{{ entry.image.url }}" 
+               alt="条目图片" 
+               class="entry-image">
+        </div>
+      {% endif %}
+      
+      <!-- 条目视频（新增） -->
+      {% if entry.video %}
+        <div class="entry-video-container mt-3">
+          <video controls class="entry-video">
+            <source src="{{ entry.video.url }}" type="video/mp4">
+            <source src="{{ entry.video.url }}" type="video/webm">
+            您的浏览器不支持视频播放
+          </video>
+        </div>
+      {% endif %}
+      
+      <!-- 操作按钮：仅所有者可见 -->
+      {% if topic.owner == user %}
+        <p class="entry-actions">
+          <a href="{% url 'learning_logs:edit_entry' entry.id %}" class="edit-link">编辑条目</a>
+          <a href="{% url 'learning_logs:delete_entry' entry.id %}" class="delete-link">删除条目</a>
+        </p>
+      {% endif %}
+      
+      <!-- 点赞区域 -->
+      <div class="like-section">
+        {% if user.is_authenticated %}
+          <button class="like-btn" data-entry-id="{{ entry.id }}">
+            <i class="bi {% if entry.user_liked %}bi-heart-fill{% else %}bi-heart{% endif %} me-1"></i>
+            {% if entry.user_liked %}已点赞{% else %}点赞{% endif %}
+          </button>
+        {% else %}
+          <button class="like-btn" disabled>
+            <i class="bi bi-heart me-1"></i>点赞
+          </button>
+          <small class="login-hint">(登录后可点赞)</small>
+        {% endif %}
+        <span class="like-count">{{ entry.like_count }} 人点赞</span>
+      </div>
+      
+      <!-- 评论区域 -->
+      <div class="comment-section">
+        <!-- 评论列表 -->
+        <div class="comment-list">
+          <h6 class="comment-count">评论 ({{ entry.comment_count }})</h6>
+          {% for comment in entry.comments.all %}
+            <div class="comment-item">
+              <div class="comment-header">
+                <span class="comment-author">{{ comment.user.username }}</span>
+                <span class="comment-time">{{ comment.created_at|date:'M d, Y H:i' }}</span>
+              </div>
+              <p class="comment-text">{{ comment.text }}</p>
+            </div>
+          {% empty %}
+            <p class="no-comments">暂无评论，快来发表你的看法吧~</p>
+          {% endfor %}
+        </div>
+        
+        <!-- 评论表单（仅登录用户可见） -->
+        {% if user.is_authenticated %}
+          <form action="{% url 'learning_logs:add_comment' entry.id %}" method="post" class="comment-form">
+            {% csrf_token %}
+            {{ comment_form.text }}
+            <button type="submit" class="submit-comment-btn">提交评论</button>
+          </form>
+        {% else %}
+          <p class="login-to-comment">
+            <a href="{% url 'accounts:login' %}">登录</a> 后可发表评论
+          </p>
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}
+    {% if not search_query %}
+      <p class="no-entries">此主题下暂无条目</p>
+    {% endif %}
+  {% endfor %}
+  
+  <!-- 点赞功能AJAX脚本 -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const likeButtons = document.querySelectorAll('.like-btn');
+      const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+      
+      likeButtons.forEach(button => {
+        button.addEventListener('click', function() {
+          const entryId = this.getAttribute('data-entry-id');
+          const likeCountEl = this.nextElementSibling;
+          const icon = this.querySelector('i');
+          
+          fetch(`{% url 'learning_logs:like_entry' 0 %}`.replace('0', entryId), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': csrfToken
+            },
+          })
+          .then(response => response.json())
+          .then(data => {
+            if (data.is_liked) {
+              icon.classList.remove('bi-heart');
+              icon.classList.add('bi-heart-fill');
+              this.textContent = ' 已点赞';
+              this.classList.add('liked');
+            } else {
+              icon.classList.remove('bi-heart-fill');
+              icon.classList.add('bi-heart');
+              this.textContent = ' 点赞';
+              this.classList.remove('liked');
+            }
+            likeCountEl.textContent = `${data.like_count} 人点赞`;
+          })
+          .catch(error => console.error('点赞失败:', error));
+        });
+      });
+    });
+  </script>
 {% endblock content %}
