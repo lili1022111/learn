@@ -21,7 +21,6 @@ class Topic(models.Model):
         verbose_name=_("所属用户"),
         related_name="topics"
     )
-    # 公开分享相关字段
     is_public = models.BooleanField(
         _("是否公开"),
         default=False,
@@ -45,9 +44,14 @@ class Topic(models.Model):
         return self.text
     
     def save(self, *args, **kwargs):
-        """保存时自动处理过期逻辑"""
+        """完善：保存时自动处理过期逻辑，确保状态一致性"""
+        # 若设置了过期时间且已过期，强制设为不公开
         if self.share_expire_at and self.share_expire_at < timezone.now():
-            self.is_public = False  # 已过期则自动设为不公开
+            self.is_public = False
+        # 若未公开，清空密码和过期时间（避免无效配置）
+        if not self.is_public:
+            self.share_password = None
+            self.share_expire_at = None
         super().save(*args, **kwargs)
     
     class Meta:
@@ -56,45 +60,33 @@ class Topic(models.Model):
         ordering = ["-date_added"]
 
 class Entry(models.Model):
-    """与主题相关的具体条目内容（支持图文、视频混排）"""
+    """与主题相关的具体条目内容"""
     topic = models.ForeignKey(
         Topic,
         on_delete=models.CASCADE,
         verbose_name=_("关联主题"),
         related_name="entries"
     )
-    text = models.TextField(
-        _("条目内容"),
-        help_text=_("存储条目详细内容的文本字段")
-    )
-    # 图片字段：支持上传图片
+    text = models.TextField(_("条目内容"))
     image = models.ImageField(
         _("条目图片"),
-        upload_to="entry_media/images/%Y/%m/%d/",  # 调整路径，与视频区分
+        upload_to="entry_media/images/%Y/%m/%d/",
         blank=True,
-        null=True,
-        help_text=_("可选：上传与条目相关的图片")
+        null=True
     )
-    # 新增视频字段
     video = models.FileField(
         _("条目视频"),
-        upload_to="entry_media/videos/%Y/%m/%d/",  # 视频单独存储目录
+        upload_to="entry_media/videos/%Y/%m/%d/",
         blank=True,
-        null=True,
-        help_text=_("可选：上传与条目相关的视频（支持MP4、WebM格式）")
+        null=True
     )
-    date_added = models.DateTimeField(
-        _("创建时间"),
-        auto_now_add=True,
-        db_index=True
-    )
+    date_added = models.DateTimeField(_("创建时间"), auto_now_add=True)
     
     @property
     def like_count(self):
         return self.likes.count()
     
     def __str__(self):
-        """返回条目简短描述"""
         return f"{self.text[:50]}..."
     
     class Meta:
@@ -103,20 +95,41 @@ class Entry(models.Model):
         ordering = ["-date_added"]
 
 class Like(models.Model):
-    """点赞模型：关联条目和用户"""
+    """点赞模型"""
     entry = models.ForeignKey(Entry, on_delete=models.CASCADE, related_name='likes')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='entry_likes')
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
-        unique_together = ('entry', 'user')  # 一个用户对一个条目只能点一次赞
+        unique_together = ('entry', 'user')  # 防止重复点赞
 
 class Comment(models.Model):
-    """评论模型：关联条目和用户"""
-    entry = models.ForeignKey(Entry, on_delete=models.CASCADE, related_name='comments')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='entry_comments')
-    text = models.TextField(max_length=500)  # 限制评论长度
+    """评论模型（支持嵌套回复）"""
+    entry = models.ForeignKey(
+        Entry,
+        on_delete=models.CASCADE,
+        related_name='comments'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='entry_comments'
+    )
+    text = models.TextField(max_length=500)
     created_at = models.DateTimeField(default=timezone.now)
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='replies'
+    )
     
     class Meta:
-        ordering = ['-created_at']  # 最新评论在前
+        ordering = ['created_at']
+    
+    def is_parent(self):
+        return self.parent is None
+    
+    def get_replies(self):
+        return self.replies.all()
